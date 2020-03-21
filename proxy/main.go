@@ -19,6 +19,7 @@ import (
 var (
 	baseURL   = "http://router.local"
 	httpProxy = "http://192.168.254.104:8888"
+	cache     map[string]events.APIGatewayProxyResponse
 )
 
 func init() {
@@ -28,10 +29,61 @@ func init() {
 	if val := os.Getenv("HTTP_PROXY"); val != "" {
 		httpProxy = val
 	}
+
+	cache = make(map[string]events.APIGatewayProxyResponse)
+}
+
+func isCacheable(path string) bool {
+	switch path {
+	case "/", "/rpSys.html":
+		return true
+	}
+
+	if strings.HasSuffix(path, ".png") {
+		return true
+	}
+	if strings.HasSuffix(path, ".gif") {
+		return true
+	}
+	if strings.HasSuffix(path, ".css") {
+		return true
+	}
+	if strings.HasSuffix(path, ".js") {
+		return true
+	}
+	if strings.Contains(path, "/help/") {
+		return true
+	}
+
+	return false
 }
 
 func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	defer handlePanic()
+
+	if proxy, ok := event.QueryStringParameters["proxy"]; ok {
+		log.Printf("Change PROXY: %s -> %s", httpProxy, proxy)
+		httpProxy = proxy
+		if _, ok := cache[event.Path]; ok {
+			delete(cache, event.Path)
+		}
+	}
+
+	if port, ok := event.QueryStringParameters["port"]; ok {
+		parts := strings.Split(httpProxy, ":")
+		if len(parts) == 3 {
+			httpProxy = strings.ReplaceAll(httpProxy, parts[2], port)
+			if _, ok := cache[event.Path]; ok {
+				delete(cache, event.Path)
+			}
+		}
+		log.Printf("Change PORT: %s, %#v -> %s", port, parts, httpProxy)
+	}
+
+	if prev, ok := cache[event.Path]; ok {
+		log.Printf("CACHED %s %s", event.HTTPMethod, event.Path)
+		return prev, nil
+	}
 
 	log.Printf("Got event: %#v", event)
 
@@ -107,6 +159,10 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			"'/", `'/`+stage+`/`,
 		)
 		res.Body = r.Replace(string(body))
+	}
+
+	if isCacheable(event.Path) {
+		cache[event.Path] = *res
 	}
 
 	return *res, nil
