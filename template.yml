@@ -1,0 +1,72 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Project for Router Local Proxy
+Parameters:
+  Stage:
+    Type: "String"
+  DeployBucket:
+    Type: "String"
+
+Globals:
+  Function:
+    Timeout: 120
+    Runtime: go1.x
+  Api:
+    BinaryMediaTypes:
+      - image/*
+      - image/webp
+      - image/gif
+      - image/png
+      - image/jpg
+
+
+Resources:
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Stage
+
+  ProxyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Join ["-", ["router-local-proxy", !Ref Stage]]
+      CodeUri: bin/proxy.zip
+      Handler: proxy
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /
+            Method: GET
+      Environment:
+        Variables:
+          BASE_URL: "http://router.local"
+          HTTP_PROXY: "http://0.tcp.ngrok.io:17225"
+        
+  ProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: '{proxy+}'
+
+  ProxyResourceANY:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      # MethodResponses:
+      #   - StatusCode: 200
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        IntegrationResponses:
+          - ContentHandling: CONVERT_TO_BINARY
+            StatusCode: 200
+        PassthroughBehavior: WHEN_NO_MATCH
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ProxyFunction.Arn}/invocations
